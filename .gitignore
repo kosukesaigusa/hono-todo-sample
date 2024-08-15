@@ -34,3 +34,5 @@ lerna-debug.log*
 
 # secrets
 wrangler.toml
+Makefile
+test.http
