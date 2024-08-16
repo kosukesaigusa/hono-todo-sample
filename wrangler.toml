@@ -1,4 +1,5 @@
 name = "hono-todo-sample"
+main = "./src/index.ts"
 compatibility_date = "2024-08-15"
 
 [[d1_databases]]
