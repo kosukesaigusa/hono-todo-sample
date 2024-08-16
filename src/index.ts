@@ -1,8 +1,9 @@
+import { zValidator } from '@hono/zod-validator'
 import { Context, Hono, Next } from 'hono'
 import { cors } from 'hono/cors'
+import { HTTPException } from 'hono/http-exception'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
-import { zValidator } from '@hono/zod-validator'
 
 type Bindings = {
   DB: D1Database
@@ -26,18 +27,27 @@ const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 app.use('/*', cors())
 
-// クライアント ID を生成または検証するミドルウェアを追加
-app.use('/*', (c: Context, next: Next) => {
+// 仮のサインイン機能として、X-Client-ID (UUID) を発行してヘッダに与える。
+app.post('/sign_in', async (c) => {
   let clientId = c.req.header('X-Client-ID')
   if (!clientId) {
     clientId = uuidv4()
-    c.header('X-Client-ID', clientId)
   }
-  c.set('clientId', clientId)
-  return next()
+  c.header('X-Client-ID', clientId)
+  return c.json({ clientId })
 })
 
-// Todo 一覧の取得
+// 以下のすべてのルートに対してミドルウェアを適用する。
+app.use('/*', async (c: Context, next: Next) => {
+  const clientId = c.req.header('X-Client-ID')
+  if (!clientId) {
+    throw new HTTPException(401)
+  }
+  c.set('clientId', clientId)
+  await next()
+})
+
+// Todo 一覧を取得する。
 app.get('/todos', async (c) => {
   const clientId = c.get('clientId')
   const { results } = await c.env.DB.prepare(
@@ -49,7 +59,7 @@ app.get('/todos', async (c) => {
   return c.json(results.map((todo) => todoSchema.parse(todo)))
 })
 
-// Todo 1 件の作成
+// Todo 1 件を作成する。
 app.post(
   '/todos',
   zValidator('json', z.object({ title: z.string() })),
@@ -66,7 +76,7 @@ app.post(
   }
 )
 
-// Todo N 件の更新
+// Todo N 件を更新する。
 app.patch(
   '/todos',
   zValidator(
@@ -105,7 +115,7 @@ app.patch(
   }
 )
 
-// Todo N 件の削除
+// Todo N 件を削除する。
 app.delete(
   '/todos',
   zValidator('json', z.object({ ids: z.array(z.number()) })),
