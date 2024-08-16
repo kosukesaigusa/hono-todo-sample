@@ -1,7 +1,8 @@
 import { zValidator } from '@hono/zod-validator'
-import { Context, Hono, Next } from 'hono'
+import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
+import { prettyJSON } from 'hono/pretty-json'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
 
@@ -25,26 +26,27 @@ type Todo = z.infer<typeof todoSchema>
 
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
-app.use('/*', cors())
+app.use(prettyJSON())
 
-// 仮のサインイン機能として、X-Client-ID (UUID) を発行してヘッダに与える。
-app.post('/sign_in', async (c) => {
+app.use(cors())
+
+// 仮のサインイン機能として、X-Client-ID (UUID) を発行する。
+app.post('/sign_in', (c) => {
   let clientId = c.req.header('X-Client-ID')
   if (!clientId) {
     clientId = uuidv4()
   }
-  c.header('X-Client-ID', clientId)
   return c.json({ clientId })
 })
 
 // 以下のすべてのルートに対してミドルウェアを適用する。
-app.use('/*', async (c: Context, next: Next) => {
+app.use((c, next) => {
   const clientId = c.req.header('X-Client-ID')
   if (!clientId) {
     throw new HTTPException(401)
   }
   c.set('clientId', clientId)
-  await next()
+  return next()
 })
 
 // Todo 一覧を取得する。
