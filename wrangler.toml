@@ -3,5 +3,5 @@ compatibility_date = "2024-08-15"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "my-database"
-database_id = ""
+database_name = "hono-todo-sample"
+database_id = "7256ce22-d413-4035-9287-093ad86db19f"

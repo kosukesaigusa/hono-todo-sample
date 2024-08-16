@@ -33,6 +33,5 @@ lerna-debug.log*
 .DS_Store
 
 # secrets
-wrangler.toml
 Makefile
 test.http
