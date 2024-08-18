@@ -1,3 +1,4 @@
+import { swaggerUI } from '@hono/swagger-ui'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -5,6 +6,7 @@ import { HTTPException } from 'hono/http-exception'
 import { prettyJSON } from 'hono/pretty-json'
 import { v4 as uuidv4 } from 'uuid'
 import { z } from 'zod'
+import { openApiDoc } from './open-api'
 
 type Bindings = {
   DB: D1Database
@@ -22,13 +24,19 @@ const todoSchema = z.object({
   client_id: z.string(),
 })
 
-type Todo = z.infer<typeof todoSchema>
-
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
 
 app.use(prettyJSON())
 
 app.use(cors())
+
+// Swagger UI のエンドポイントを追加する。
+app.get('/swagger-ui', swaggerUI({ url: '/openapi.json' }))
+
+// OpenAPI JSON を提供するエンドポイントを追加する。
+app.get('/openapi.json', (c) => {
+  return c.json(openApiDoc)
+})
 
 // 仮のサインイン機能として、X-Client-ID (UUID) を発行する。
 app.post('/sign_in', (c) => {
@@ -58,7 +66,7 @@ app.get('/todos', async (c) => {
     .bind(clientId)
     .all()
 
-  return c.json(results.map((todo) => todoSchema.parse(todo)))
+  return c.json({ todos: results.map((todo) => todoSchema.parse(todo)) })
 })
 
 // Todo 1 件を作成する。
@@ -78,59 +86,122 @@ app.post(
   }
 )
 
-// Todo N 件を更新する。
+// Todo 1 件を更新する。
 app.patch(
-  '/todos',
+  '/todos/:id',
   zValidator(
     'json',
-    z.array(
-      z.object({
-        id: z.number(),
-        title: z.string().optional(),
-        completed: z.boolean().optional(),
-      })
-    )
+    z.object({
+      title: z.string().optional(),
+      completed: z.boolean().optional(),
+    })
   ),
   async (c) => {
-    const updates = c.req.valid('json')
+    const id = parseInt(c.req.param('id'))
+    const { title, completed } = c.req.valid('json')
     const clientId = c.get('clientId')
-    const results: Todo[] = []
 
-    for (const update of updates) {
-      const { id, title, completed } = update
-      const { results: updatedTodo } = await c.env.DB.prepare(
-        'UPDATE todos SET title = COALESCE(?, title), completed = COALESCE(?, completed) WHERE id = ? AND client_id = ? RETURNING *'
+    const { results } = await c.env.DB.prepare(
+      'UPDATE todos SET title = COALESCE(?, title), completed = COALESCE(?, completed) WHERE id = ? AND client_id = ? RETURNING *'
+    )
+      .bind(
+        title,
+        completed === undefined ? undefined : completed ? 1 : 0,
+        id,
+        clientId
       )
-        .bind(
-          title,
-          completed === undefined ? undefined : completed ? 1 : 0,
-          id,
-          clientId
-        )
-        .run()
-      if (updatedTodo.length > 0) {
-        results.push(todoSchema.parse(updatedTodo[0]))
-      }
+      .run()
+
+    if (results.length === 0) {
+      return c.json({ message: 'Todo not found' }, 404)
     }
 
-    return c.json(results)
+    const todo = todoSchema.parse(results[0])
+    return c.json(todo)
   }
 )
 
-// Todo N 件を削除する。
-app.delete(
-  '/todos',
-  zValidator('json', z.object({ ids: z.array(z.number()) })),
+// 複数の Todo の完了状態を一括更新する。
+app.post(
+  '/todos/bulk-complete',
+  zValidator(
+    'json',
+    z.object({
+      ids: z.array(z.number()),
+      completed: z.boolean(),
+    })
+  ),
+  async (c) => {
+    const { ids, completed } = c.req.valid('json')
+    const clientId = c.get('clientId')
+
+    // プレースホルダーを生成する。
+    const placeholders = ids.map(() => '?').join(',')
+
+    const { results } = await c.env.DB.prepare(
+      `UPDATE todos SET completed = ? WHERE id IN (${placeholders}) AND client_id = ? RETURNING *`
+    )
+      .bind(completed ? 1 : 0, ...ids, clientId)
+      .all()
+
+    const updatedTodos = results.map((todo) => todoSchema.parse(todo))
+
+    if (updatedTodos.length === 0) {
+      return c.json({ message: 'No todos found or updated' }, 404)
+    }
+
+    return c.json({ todos: updatedTodos })
+  }
+)
+
+// Todo 1 件を削除する。
+app.delete('/todos/:id', async (c) => {
+  const id = parseInt(c.req.param('id'))
+  const clientId = c.get('clientId')
+
+  const { results } = await c.env.DB.prepare(
+    'DELETE FROM todos WHERE id = ? AND client_id = ? RETURNING *'
+  )
+    .bind(id, clientId)
+    .run()
+
+  if (results.length === 0) {
+    return c.json({ message: 'Todo not found' }, 404)
+  }
+
+  const todo = todoSchema.parse(results[0])
+  return c.json(todo)
+})
+
+// 複数の Todo をまとめて削除する。
+app.post(
+  '/todos/bulk-delete',
+  zValidator(
+    'json',
+    z.object({
+      ids: z.array(z.number()),
+    })
+  ),
   async (c) => {
     const { ids } = c.req.valid('json')
     const clientId = c.get('clientId')
+
+    // プレースホルダーを生成する。
     const placeholders = ids.map(() => '?').join(',')
+
     const { results } = await c.env.DB.prepare(
       `DELETE FROM todos WHERE id IN (${placeholders}) AND client_id = ? RETURNING *`
     )
       .bind(...ids, clientId)
-      .run()
-    return c.json(results.map((todo) => todoSchema.parse(todo)))
+      .all()
+
+    const deletedTodos = results.map((todo) => todoSchema.parse(todo))
+
+    if (deletedTodos.length === 0) {
+      return c.json({ message: 'No todos found or deleted' }, 404)
+    }
+
+    return c.json({ todos: deletedTodos })
   }
 )
 
